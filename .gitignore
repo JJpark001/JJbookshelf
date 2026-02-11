@@ -1,0 +1,15 @@
+# 依赖（若以后用 npm install）
+node_modules/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 本地环境（若有）
+.env
+.env.local
