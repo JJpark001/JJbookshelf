@@ -18,12 +18,18 @@ const appState = {
   theme: "light",
   /** @type {{ id: string; message: string; time: number }[]} */
   logs: [],
+  /** 数据库连接/加载状态：success=已连接, failed=失败, offline=未连接 */
+  /** @type {"success" | "failed" | "offline"} */
+  dbLoadStatus: "offline",
+  /** 最近一次保存到数据库的结果，用于短时提示；null 或过期后显示 dbLoadStatus */
+  /** @type {{ status: "success" | "failed" | "offline"; until: number } | null} */
+  lastSaveStatus: null,
 };
 
 /**
  * 初始化
  */
-function init() {
+async function init() {
   const metaTheme = localStorage.getItem("my-bookshelf-theme");
   if (metaTheme === "dark" || metaTheme === "light") {
     appState.theme = metaTheme;
@@ -32,8 +38,24 @@ function init() {
   }
   document.documentElement.setAttribute("data-theme", appState.theme);
 
-  const { books } = window.BookshelfStorage.loadBooks();
-  appState.books = books;
+  const storage = window.BookshelfStorage;
+
+  try {
+    if (storage.loadBooksFromSupabase) {
+      const result = await storage.loadBooksFromSupabase();
+      appState.books = result.books;
+      appState.dbLoadStatus = result.loadStatus || "offline";
+    } else {
+      const { books } = storage.loadBooks();
+      appState.books = books;
+      appState.dbLoadStatus = "offline";
+    }
+  } catch (e) {
+    console.error("加载书籍失败，退回本地数据", e);
+    const { books } = storage.loadBooks();
+    appState.books = books;
+    appState.dbLoadStatus = "failed";
+  }
 
   // 读取本地操作日志
   try {
@@ -62,6 +84,7 @@ function renderApp() {
   const appEl = document.createElement("div");
   appEl.className = "app";
 
+  appEl.appendChild(renderSyncStatusBar());
   appEl.appendChild(renderHeader());
   appEl.appendChild(renderStatsSection());
   appEl.appendChild(renderBody());
@@ -72,6 +95,61 @@ function renderApp() {
   if (window.__bookModalState) {
     renderModal(window.__bookModalState.mode, window.__bookModalState.book || null);
   }
+}
+
+/** 保存状态提示显示时长（毫秒） */
+const SAVE_STATUS_DURATION = 5000;
+
+/**
+ * 根据当前应显示的内容返回：文案、样式类型
+ * @returns {{ text: string; type: "success" | "failed" | "offline" }}
+ */
+function getSyncStatusDisplay() {
+  const now = Date.now();
+  if (appState.lastSaveStatus && appState.lastSaveStatus.until > now) {
+    const s = appState.lastSaveStatus.status;
+    const text =
+      s === "success"
+        ? "已成功更新到数据库"
+        : s === "failed"
+          ? "更新失败，未同步到数据库"
+          : "未更新到数据库（未连接）";
+    return { text, type: s };
+  }
+  const s = appState.dbLoadStatus;
+  const text =
+    s === "success"
+      ? "书架已成功连接数据库"
+      : s === "failed"
+        ? "书架连接数据库失败"
+        : "未连接到数据库";
+  return { text, type: s };
+}
+
+/**
+ * 顶部数据库/同步状态栏
+ */
+function renderSyncStatusBar() {
+  const bar = document.createElement("div");
+  bar.className = "sync-status-bar";
+  const { text, type } = getSyncStatusDisplay();
+  bar.setAttribute("data-status", type);
+  bar.textContent = text;
+  return bar;
+}
+
+/**
+ * 保存书籍并更新同步状态提示（用于用户触发的增删改）
+ * @param {import("./bookModel.js").Book[]} books
+ */
+async function saveBooksAndShowStatus(books) {
+  const storage = window.BookshelfStorage;
+  const result = await storage.saveBooks(books);
+  appState.lastSaveStatus = {
+    status: result.syncStatus,
+    until: Date.now() + SAVE_STATUS_DURATION,
+  };
+  renderApp();
 }
 
 /**
@@ -401,7 +479,7 @@ function buildBookTable() {
       copyBtn.className = "btn-ghost btn";
       copyBtn.style.padding = "2px 10px";
       copyBtn.innerHTML = '<span class="text-xs">复制</span>';
-      copyBtn.onclick = () => {
+      copyBtn.onclick = async () => {
         const newTitle = getNextCopyTitle(book.title || "未命名书籍");
         const newBook = window.BookModel.createBook({
           ...book,
@@ -411,21 +489,19 @@ function buildBookTable() {
           updatedAt: Date.now(),
         });
         appState.books = [newBook, ...appState.books];
-        window.BookshelfStorage.saveBooks(appState.books);
+        await saveBooksAndShowStatus(appState.books);
         pushLog(`复制书籍「${book.title}」为「${newBook.title}」`);
-        renderApp();
       };
 
       const delBtn = document.createElement("button");
       delBtn.className = "btn-ghost btn";
       delBtn.style.padding = "2px 10px";
       delBtn.innerHTML = '<span class="text-xs" style="color:#dc2626">删除</span>';
-      delBtn.onclick = () => {
+      delBtn.onclick = async () => {
         if (confirm(`删除「${book.title}」？`)) {
           appState.books = appState.books.filter((b) => b.id !== book.id);
-          window.BookshelfStorage.saveBooks(appState.books);
+          await saveBooksAndShowStatus(appState.books);
           pushLog(`删除书籍「${book.title}」`);
-          renderApp();
         }
       };
 
@@ -535,7 +611,7 @@ function attachInlineEdit(element, book, field) {
     input.focus();
     input.select();
 
-    const finish = (commit) => {
+    const finish = async (commit) => {
       if (commit) {
         const newVal = input.value.trim();
         if (newVal && newVal !== oldValue) {
@@ -547,7 +623,7 @@ function attachInlineEdit(element, book, field) {
           appState.books = appState.books.map((b) =>
             b.id === book.id ? updated : b,
           );
-          window.BookshelfStorage.saveBooks(appState.books);
+          await saveBooksAndShowStatus(appState.books);
           const label = field === "title" ? "书名" : "作者";
           pushLog(`修改「${label}」为「${newVal}」（书籍：${updated.title}）`);
         }
@@ -1041,7 +1117,7 @@ function renderModal(mode, book) {
   const okBtn = document.createElement("button");
   okBtn.className = "btn";
   okBtn.textContent = mode === "create" ? "添加" : "保存";
-  okBtn.onclick = () => {
+  okBtn.onclick = async () => {
     const errors = [];
     if (!titleField.input.value.trim()) {
       errors.push("书名为必填项");
@@ -1088,7 +1164,7 @@ function renderModal(mode, book) {
       pushLog(`编辑书籍「${updated.title}」`);
     }
 
-    window.BookshelfStorage.saveBooks(appState.books);
+    await saveBooksAndShowStatus(appState.books);
     closeBookModal();
     renderApp();
   };

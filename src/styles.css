@@ -49,6 +49,40 @@ body {
   padding: 24px 20px 40px;
 }
 
+/* 顶部数据库/同步状态栏 */
+.sync-status-bar {
+  font-size: 12px;
+  padding: 6px 12px;
+  margin: -8px 0 12px 0;
+  border-radius: 6px;
+  text-align: center;
+  transition: background-color 0.2s, color 0.2s;
+}
+.sync-status-bar[data-status="success"] {
+  background: #dcfce7;
+  color: #166534;
+}
+[data-theme="dark"] .sync-status-bar[data-status="success"] {
+  background: #14532d;
+  color: #86efac;
+}
+.sync-status-bar[data-status="failed"] {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+[data-theme="dark"] .sync-status-bar[data-status="failed"] {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+.sync-status-bar[data-status="offline"] {
+  background: #fef3c7;
+  color: #b45309;
+}
+[data-theme="dark"] .sync-status-bar[data-status="offline"] {
+  background: #78350f;
+  color: #fde68a;
+}
+
 .app-header {
   display: flex;
   align-items: center;
